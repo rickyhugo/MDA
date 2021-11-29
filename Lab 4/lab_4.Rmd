@@ -1,0 +1,419 @@
+---
+title: "MDA - HA4"
+output: html_notebook
+---
+
+## Import libraries
+```{r, warning=FALSE}
+# import libraries
+library(readxl)
+library(stats)
+library(matlib)
+library(ggplot2)
+library(qqplotr)
+library(broom)
+library(Hmisc)
+library(dplyr)
+library(knitr)
+```
+
+
+## Read data
+```{r}
+# read data
+d = as.data.frame(read_excel('Knee.xlsx'))
+d[d == "M"] = NA
+# summary(d)
+```
+
+
+## Task 1
+```{r}
+# -----------------------------------------------------------------------------
+# Task 1
+
+# Variable definitions:
+# I_Q_conNm_weight (injured, concentric)
+# C_Q_conNm_weight (healthy, concentric) 
+# I_Q_eccNm_weight (injured, eccentric)
+# C_Q_eccNm_weight (healthy, eccentric)
+
+# Test: Multivariate Hotelling's T-squared test statistic (Paired comparisons)
+
+# extract relevant variables
+d_t1 = cbind(
+  group=d$Grupp,
+  I_Q_con=d$I_Q_conNm_weight,
+  I_Q_ecc=d$I_Q_eccNm_weight,
+  I_H_con=d$I,
+  I_H_ecc=d$I_H_eccNm_weight,
+  C_Q_con=d$C_Q_conNm_weight,
+  C_Q_ecc=d$C_Q_eccNm_weight,
+  C_H_con=d$C_H_conNm_weight,
+  C_H_ecc=d$C_H_eccNm_weight
+)
+
+# remove NA's and convert extracted data to data frame
+D_t1_chr = as.data.frame(na.omit(d_t1))
+D_t1 = as.data.frame(sapply(D_t1_chr, as.numeric))
+
+# split into separate data frame for each group
+D_t1_gr1 = D_t1[D_t1$group == 1, ]
+D_t1_gr2 = D_t1[D_t1$group == 2, ]
+```
+
+
+```{r}
+# compute paired comparison statistics
+paired_comp = function(gr1, gr2, a=.05) {
+  # compute parameters
+  D = gr1 - gr2
+  D_bar = as.matrix(colMeans(D))
+  S = cov(D)
+  n = dim(gr1)[1]
+  p = dim(gr1)[2]
+  
+  # compute statistics (H0: delta = 0)
+  H_T2 = n * t(D_bar) %*% inv(S) %*% D_bar
+  
+  # compute F-statistics
+  scale_p = (p * (n - 1)) / (n - p)
+  F1 = qf(1 - (a), p, n-p)
+  F_stat = scale_p * F1
+  
+  # hypothesis testing
+  if (H_T2 > F_stat) {
+    cat("Reject null hypothesis\n\n")
+    cat("Test-stat:", H_T2, "\n")
+    cat("F-quantile:", F_stat)
+  } else {
+    print("Do not reject null")
+  }
+  return(data.frame(Hotellings_T2=H_T2, F_qnt=F_stat))
+}
+```
+
+
+```{r}
+# compute Bonferroni CI
+bonf_CI = function(gr1, gr2, a=.05) {
+  # compute parameters
+  D = gr1 - gr2
+  D_bar = as.matrix(colMeans(D))
+  S = cov(D)
+  n = dim(gr1)[1]
+  p = dim(gr1)[2]
+  bon_CI = matrix(rep(0, p * 3), nrow=p)
+  for (i in 1:p) {
+    bon_CI[i, 1] <- D_bar[i]
+    bon_CI[i, 2] <- D_bar[i] - qt(1 - a / (2 * p), n - 1) * sqrt(S[i, i]/n)
+    bon_CI[i, 3] <- D_bar[i] + qt(1 - a / (2 * p), n - 1) * sqrt(S[i, i]/n)
+  }
+  return(data.frame(estimate=bon_CI[, 1], L=bon_CI[, 2], U=bon_CI[, 3]))
+}
+
+```
+
+
+```{r}
+# compare injured to non-injured by paired comparisons
+# group 1 (operated)
+gr1_I = D_t1_gr1[ , c(2:5)] # injured
+gr1_NI = D_t1_gr1[ , c(6:9)] # non-injured
+D = gr1_I - gr1_NI
+```
+
+```{r}
+m_vec = mahalanobis(D, colMeans(D), cov(D))
+m_p = pchisq(m_vec, df=3, lower.tail=FALSE)
+idx_rm = which(m_p < 0.05)
+m_col = rep("1", 31)
+m_col[idx_rm] = "2"
+plot(
+  1:length(m_p), m_p, ylab="p-value",
+  xlab="Observation", col=m_col, main="Outliers in Treatment Group 1"
+)
+abline(h=0.05, lty=2)
+```
+```{r}
+c_n = c()
+I_n = colnames(gr1_I)
+NI_n = colnames(gr1_NI)
+for (i in 1:4) {
+  c_n[i] = paste(I_n[i], "-", NI_n[i])
+}
+boxplot(D[-idx_rm, ], main="Treatment Group 1", names=c_n, cex.axis=.8)
+```
+
+
+
+```{r}
+# check normality group 1
+png(file="plot/qq_trt1.png")
+par(mfrow=c(2, 2))
+for (i in 1:4) {
+  qqnorm(
+    D[-idx_rm, i], pch=1, frame=FALSE, xlab=if (i > 2) "Theoretical Quantiles" else "",
+    ylab=if (i %in% c(1, 3)) "Sample Quantiles" else "",
+    main=paste(colnames(gr1_I)[i], "-", colnames(gr1_NI)[i])
+  )
+  qqline(D[-idx_rm, i], col="3", lwd=2)
+  grid()
+}
+```
+
+
+```{r}
+# compute test statistic within trt group 1
+stat_g1 = paired_comp(gr1_I[-idx_rm,], gr1_NI[-idx_rm, ])
+```
+
+```{r}
+# compute CI within trt group 1
+CI_g1 = bonf_CI(gr1_I[-idx_rm, ], gr1_NI[-idx_rm, ])
+CI_g1
+
+# sign. difference between the test 1 and 2:
+# reason to believe that NI > I in these instances
+```
+```{r}
+print(latex(CI_g1 %>% mutate_if(is.numeric, round, digits=4), file=""))
+```
+
+
+```{r}
+# compare injured to non-injured by paired comparisons
+# group 2 (treated but not operated)
+gr2_I = D_t1_gr2[ , c(2:5)] # injured
+gr2_NI = D_t1_gr2[ , c(6:9)] # non-injured
+D = gr2_I - gr2_NI
+```
+
+```{r}
+m_vec = mahalanobis(D, colMeans(D), cov(D))
+m_p = pchisq(m_vec, df=3, lower.tail=FALSE)
+idx_rm = which(m_p < 0.05)
+m_col = rep("1", 35)
+m_col[idx_rm] = "2"
+plot(
+  1:length(m_p), m_p, ylab="p-value",
+  xlab="Observation", col=m_col, main="Outliers in Treatment Group 2"
+)
+abline(h=0.05, lty=2)
+```
+```{r}
+c_n = c()
+I_n = colnames(gr1_I)
+NI_n = colnames(gr1_NI)
+for (i in 1:4) {
+  c_n[i] = paste(I_n[i], "-", NI_n[i])
+}
+boxplot(D[-idx_rm, ], main="Treatment Group 2", names=c_n, cex.axis=.8)
+```
+
+```{r}
+# check normality group 2
+png(file="plot/qq_trt2.png")
+par(mfrow=c(2, 2))
+for (i in 1:4) {
+  qqnorm(
+    D[-idx_rm, i], pch=1, frame=FALSE, xlab=if (i > 2) "Theoretical Quantiles" else "",
+    ylab=if (i %in% c(1, 3)) "Sample Quantiles" else "",
+    main=paste(colnames(gr1_I)[i], "-", colnames(gr1_NI)[i])
+  )
+  qqline(D[-idx_rm, i], col="3", lwd=2)
+  grid()
+}
+```
+
+```{r}
+# compute test statistic within trt group 2
+stat_g2 = paired_comp(gr2_I[-idx_rm, ], gr2_NI[-idx_rm, ])
+```
+
+```{r}
+# compute CI within trt group 2
+CI_g2 = bonf_CI(gr2_I[-idx_rm, ], gr2_NI[-idx_rm, ])
+CI_g2
+
+# sign. difference between the test 2:
+# reason to believe that NI > I in these instances
+```
+```{r}
+print(latex(CI_g2 %>% mutate_if(is.numeric, round, digits=4), file=""))
+```
+
+
+## Task 2
+
+```{r}
+# -----------------------------------------------------------------------------
+# Task 2
+
+# Variable definitions:
+# I__ND_Length1,2,3 (injured/dominant, 3 jumps)
+# C_D_Length1,2,3 (healthy/non-dominant, 3 jumps)
+
+# Test: Repeated measures design
+# e.g.: rstatix::anova_test()
+```
+
+
+```{r}
+# extract relevant variables
+d_t2 = cbind(
+  group=d$Grupp,
+  C_D_1=d$C_D_Length1,
+  C_D_2=d$C_D_Length2,
+  C_D_3=d$C_D_Length3
+)
+
+# remove NA's and convert extracted data to data frame
+D_t2_chr = as.data.frame(na.omit(d_t2))
+D_t2 = as.data.frame(sapply(D_t2_chr, as.numeric))
+```
+
+```{r}
+# define contrast matrix
+C1 = matrix(c(-1, 0, 1, -1, 0, 1), nrow=2)
+C1
+
+C2 = matrix(c(1, 1, 0, -1, -1, 0), nrow=2)
+C2
+```
+```{r}
+# repeated measures design
+rep_mes = function(X, C, a=.05) {
+  q = ncol(X)
+  n = nrow(X)
+  X_bar = as.matrix(colMeans(X))
+  S = cov(X)
+  S_c = C %*% S %*% t(C)
+  X_c = C %*% X_bar
+  T2 = n * t(X_c) %*% inv(S_c) %*% X_c
+  m = q - 1
+  F_stat =  (n - 1) * (q - 1)/(n - q + 1) * qf(1 - a, q - 1, n - q + 1)
+  CI = matrix(rep(0, m * 3), nrow=m)
+  for (i in 1:m) {
+    CI[i, 1] = X_c[i]
+    CI[i, 2] = X_c[i] - sqrt(F_stat * S_c[i, i] / n)
+    CI[i, 3] = X_c[i] + sqrt(F_stat * S_c[i, i] / n)
+  }
+  
+  # hypothesis testing
+  if (T2 > F_stat) {
+    cat("Reject null hypothesis\n\n")
+    cat("Test-stat:", T2, "\n")
+    cat("F-quantile:", F_stat)
+  } else {
+    print("Do not reject null")
+  }
+  
+  return(data.frame(estimate=CI[, 1], L=CI[, 2], U=CI[, 3]))
+}
+```
+
+```{r}
+res_c1 = rep_mes(D_t2[, c(2:4)], C1)
+res_c1
+```
+
+```{r}
+res_c2 = rep_mes(D_t2[, c(2:4)], C2)
+res_c2
+```
+
+```{r}
+plot(
+  c(1.1, 1.1), res_c1[1, 2:3], 
+  type="b", ylim=c(-.15, .1), xlim=c(1.09, 1.15), col="2",
+  ylab="", xlab="", lwd=2, xaxt="n"
+)
+points(c(1.12, 1.12), res_c1[2, 2:3], type="b", col="3", lwd=2)
+points(c(1.14, 1.14), res_c2[1, 2:3], type="b", col="4", lwd=2)
+grid()
+legend(
+  "topright",
+  c("T1 vs. T2", "T2 vs. T3", "T1 vs. T3"),
+  col=c("2", "3", "4"),
+  pch=1, title="Pairwise CI",
+  lwd=2
+)
+```
+
+
+```{r}
+s_dat2 = stack(D_t2[, 2:4])
+res = pairwise.t.test(s_dat2$values, s_dat2$ind, p.adjust.method="bonferroni")
+tidy(res)
+
+# clearly a significant difference between trial 1 and 3
+```
+
+
+## Task 3
+
+```{r}
+# -----------------------------------------------------------------------------
+# Task 3
+
+# Variable definitions:
+# I_Q_conNm_weight (injured, concentric)
+# C_Q_conNm_weight (healthy, concentric) 
+# I_Q_eccNm_weight (injured, eccentric)
+# C_Q_eccNm_weight (healthy, eccentric)
+# Gender
+# Grupp (1=opererad, 2=icke-opererad, 3=kontroll)
+
+# Test: MANOVA
+# e.g.: stats::manova()
+
+```
+
+```{r}
+# extract relevant variables
+d_t3 = cbind(
+  group=d$Grupp,
+  gender=d$Gender,
+  I_Q_con=d$I_Q_conNm_weight,
+  I_Q_ecc=d$I_Q_eccNm_weight,
+  I_H_con=d$I,
+  I_H_ecc=d$I_H_eccNm_weight
+)
+
+# remove NA's and convert extracted data to data frame
+D_t3_chr = as.data.frame(na.omit(d_t3))
+D_t3 = as.data.frame(sapply(D_t3_chr, as.numeric))
+D_t3 = D_t3[D_t3$group %in% c(1, 2), ]
+```
+
+```{r}
+summary(D_t3)
+```
+```{r}
+ m_res = manova(cbind(I_Q_con, I_Q_ecc, I_H_con, I_H_ecc) ~ group * gender, data=D_t3)
+summary(m_res, test="Wilks")
+```
+
+
+```{r}
+m_res$coefficients
+```
+```{r}
+s_dat3 = D_t3[, 2:3]
+res = pairwise.t.test(s_dat3$I_Q_con, s_dat3$gender, p.adjust.method="bonferroni")
+tidy(res)
+
+s_dat3 = D_t3[, c(2, 4)]
+res = pairwise.t.test(s_dat3$I_Q_ecc, s_dat3$gender, p.adjust.method="bonferroni")
+tidy(res)
+
+s_dat3 = D_t3[, c(2, 5)]
+res = pairwise.t.test(s_dat3$I_H_con, s_dat3$gender, p.adjust.method="bonferroni")
+tidy(res)
+
+s_dat3 = D_t3[, c(2, 6)]
+res = pairwise.t.test(s_dat3$I_H_ecc, s_dat3$gender, p.adjust.method="bonferroni")
+tidy(res)
+```
+
